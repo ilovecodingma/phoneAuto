@@ -6538,7 +6538,137 @@ class PhoneController:
         self.root.after(150, self.root.destroy)
 
 
+def _run_demo_capture(root, app):
+    """Drive a normally-running GUI through each feature and save screenshots.
+
+    The point: capture the app *after* the auto-connect, stats polls, and
+    process polls have populated the panels — not an empty in-process
+    instance with no main loop.
+    """
+    from PIL import ImageGrab
+    out = os.path.join(HERE, "manuals", "screenshots")
+    os.makedirs(out, exist_ok=True)
+
+    def shot(name, widget):
+        try:
+            widget.update_idletasks()
+            widget.lift()
+        except tk.TclError:
+            return
+        # Brief settle so geometry + redraws are flushed
+        widget.after(50)
+        widget.update()
+        x = widget.winfo_rootx()
+        y = widget.winfo_rooty()
+        w = widget.winfo_width()
+        h = widget.winfo_height()
+        img = ImageGrab.grab(bbox=(x, y, x + w, y + h))
+        path = os.path.join(out, f"{name}.png")
+        img.save(path)
+        print(f"saved {path}  ({w}x{h})", flush=True)
+
+    def latest_toplevel():
+        tops = [w for w in root.winfo_children() if isinstance(w, tk.Toplevel)]
+        return tops[-1] if tops else None
+
+    sequence = [
+        # Wait long enough for: auto-connect (~3s), first STATS (~1.5s),
+        # first APPS (~2.5s), and a few extra samples so the chart has data.
+        (12000, lambda: shot("01_main_window", root)),
+
+        (1500,  lambda: app._open_logcat()),
+        (3500,  lambda: (shot("02_logcat", latest_toplevel()),
+                         latest_toplevel().destroy())),
+
+        (1500,  lambda: app._open_battery()),
+        (4500,  lambda: (shot("03_battery", latest_toplevel()),
+                         latest_toplevel().destroy())),
+
+        (1500,  lambda: app._open_llm_live()),
+        (3500,  lambda: (shot("04_llm_live", latest_toplevel()),
+                         latest_toplevel().destroy())),
+
+        (1500,  lambda: app._open_scenario()),
+        (2500,  lambda: (shot("05_scenario", latest_toplevel()),
+                         latest_toplevel().destroy())),
+
+        (1500,  lambda: app._open_wire()),
+        (3500,  lambda: (shot("06_wire", latest_toplevel()),
+                         latest_toplevel().destroy())),
+
+        (1500,  lambda: app._open_stability()),
+        (3500,  lambda: (shot("07_stability", latest_toplevel()),
+                         latest_toplevel().destroy())),
+
+        # 3D view needs a uiautomator dump round-trip (~5–8s on device).
+        (1500,  lambda: app._open_3d_view()),
+        (10000, lambda: (shot("08_3d_view", latest_toplevel()),
+                         latest_toplevel().destroy())
+                if latest_toplevel() else None),
+
+        # First app row → right-click → context menu
+        (1500,  lambda: _popup_apps_menu(app)),
+        (1500,  lambda: shot("09_apps_context_menu", root)),
+        (200,   lambda: _dismiss_popup_menu(app)),
+
+        # Done
+        (1000,  lambda: root.destroy()),
+    ]
+
+    def schedule(i=0):
+        if i >= len(sequence):
+            return
+        delay, fn = sequence[i]
+
+        def run():
+            try:
+                fn()
+            except Exception as e:
+                print(f"step {i} err: {e}", flush=True)
+            root.after(50, lambda: schedule(i + 1))
+
+        root.after(delay, run)
+
+    root.after(0, schedule)
+
+
+def _popup_apps_menu(app):
+    """Right-click the first row of the Apps treeview to show its context menu."""
+    tv = app.procs_tv
+    items = tv.get_children()
+    if not items:
+        return
+    tv.selection_set(items[0])
+    bbox = tv.bbox(items[0])
+    if not bbox:
+        return
+    x = tv.winfo_rootx() + bbox[0] + bbox[2] // 2
+    y = tv.winfo_rooty() + bbox[1] + bbox[3] // 2
+
+    # Reuse the real right-click handler by synthesising the event
+    class _E:
+        pass
+    e = _E()
+    e.x = bbox[0] + bbox[2] // 2
+    e.y = bbox[1] + bbox[3] // 2
+    e.x_root = x
+    e.y_root = y
+    try:
+        app._on_proc_rmouse(e)
+    except Exception as ex:
+        print(f"popup err: {ex}", flush=True)
+
+
+def _dismiss_popup_menu(app):
+    if app._proc_menu is not None:
+        try:
+            app._proc_menu.unpost()
+        except tk.TclError:
+            pass
+
+
 def main():
+    demo = "--demo-capture" in sys.argv
     root = tk.Tk()
     if not ADB:
         root.withdraw()
@@ -6554,7 +6684,9 @@ def main():
         )
         root.destroy()
         return
-    PhoneController(root)
+    app = PhoneController(root)
+    if demo:
+        _run_demo_capture(root, app)
     root.mainloop()
 
 
