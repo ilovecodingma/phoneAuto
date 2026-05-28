@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>Phone Controller — 작업 정리</title>
+<style>
+  :root {
+    --bg: #0e0e0e;
+    --bg2: #181818;
+    --bg3: #222;
+    --border: #2a2a2a;
+    --text: #e6e6e6;
+    --muted: #8a8a8a;
+    --accent: #4ec9ff;
+    --green: #4ad991;
+    --yellow: #ffd34a;
+    --orange: #ff9f43;
+    --red: #ff5252;
+    --purple: #b48cff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.55;
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 32px 28px 80px;
+    font-size: 14px;
+  }
+  h1 {
+    font-size: 26px;
+    border-bottom: 2px solid var(--border);
+    padding-bottom: 12px;
+    margin-bottom: 8px;
+  }
+  h1 .sub { color: var(--muted); font-size: 14px; font-weight: normal; }
+  h2 {
+    color: var(--accent);
+    margin-top: 36px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 6px;
+    font-size: 18px;
+  }
+  h3 { color: var(--orange); margin-top: 22px; font-size: 15px; }
+  code, pre {
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 12.5px;
+  }
+  code { background: var(--bg3); padding: 1px 6px; border-radius: 3px; color: var(--yellow); }
+  pre {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    padding: 12px 14px;
+    border-radius: 6px;
+    overflow-x: auto;
+    color: #cdd;
+  }
+  pre code { background: none; padding: 0; color: inherit; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 8px 0 16px;
+    background: var(--bg2);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  th, td {
+    border-bottom: 1px solid var(--border);
+    padding: 8px 12px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: var(--bg3); color: var(--accent); font-weight: 600; }
+  tr:last-child td { border-bottom: none; }
+  .status-done { color: var(--green); font-weight: 600; }
+  .status-partial { color: var(--yellow); font-weight: 600; }
+  .status-no { color: var(--red); font-weight: 600; }
+  .pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    margin-right: 4px;
+    background: var(--bg3);
+    color: var(--muted);
+  }
+  .pill-new { background: #1e3a1e; color: var(--green); }
+  .pill-improved { background: #3a3a1e; color: var(--yellow); }
+  .pill-existing { background: var(--bg3); color: var(--muted); }
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  .card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 14px;
+  }
+  .card h3 { margin-top: 0; }
+  ul { padding-left: 22px; }
+  li { margin: 3px 0; }
+  .legend-box {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+    vertical-align: middle;
+    margin-right: 4px;
+  }
+  details { background: var(--bg2); padding: 8px 12px; border-radius: 4px; margin: 6px 0; }
+  details summary { cursor: pointer; color: var(--accent); }
+  .meta {
+    color: var(--muted);
+    font-size: 12px;
+    text-align: right;
+    margin-top: -4px;
+  }
+</style>
+</head>
+<body>
+
+<h1>Phone Controller <span class="sub">— Android 디바이스 모니터링/제어 도구</span></h1>
+<div class="meta">최종 갱신 2026-05-28 · 대상 디바이스 SM-M446K (Snapdragon 888 / Android 15)</div>
+
+<h2>1. 개요</h2>
+<p>
+ADB 위에서 동작하는 Tkinter GUI. 폰에 작은 TCP 데몬을 올려 화면 미러링/시스템 모니터링/입력 제어/매크로/온디바이스 LLM 런타임 병목 분석을 한 곳에서 수행합니다. 시작은 작업관리자 + 화면 미러로 출발했고, 스펙 문서(<code>android_llm_runtime_monitoring_request.md</code>)를 받아 LLM 런타임 인스펙터까지 확장.
+</p>
+
+<h3>아키텍처</h3>
+<pre><code>┌──────────────────────────────────────┐         ┌──────────────────────────┐
+│  PC: gui.py (Tkinter)                │  TCP    │  Phone: nc -L :8889      │
+│  - device picker                     │ &lt;═════&gt; │  fork handler.sh         │
+│  - timeline / charts / detail views  │ adb fwd │  - input / dumpsys /     │
+│  - artifacts session writer          │         │    /proc /sys parsing    │
+│  - perfetto/simpleperf orchestration │         │  - screenrecord stream   │
+└──────────────────────────────────────┘         └──────────────────────────┘</code></pre>
+
+<h2>2. 구현된 기능 (카테고리별)</h2>
+
+<div class="grid">
+
+<div class="card">
+  <h3>실시간 시스템 모니터링</h3>
+  <ul>
+    <li>CPU 전체%, 코어별 freq · MEM% · CPU 온도 · GPU 모델/busy/freq · Battery · Power(mW, root 환경)</li>
+    <li>1.5초 폴링, 클라이언트 측 delta 계산</li>
+    <li>thermal zone 자동 스캔</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h3>프로세스/스레드 분석</h3>
+  <ul>
+    <li>foreground 앱 + 사용자앱 CPU/MEM 순위 (top -m 80, USER ~ /^u0_a/)</li>
+    <li>우클릭 → threads: per-TID CPU%/runqueue WAIT% (proc/task/stat+schedstat)</li>
+    <li>우클릭 → I/O+sched: /proc/io rchar/wchar/read_bytes 델타 + cpuset/cgroup/governor</li>
+    <li>우클릭 → memory detail: dumpsys meminfo + smaps_rollup + PSS sparkline + 시작점 대비 Δ</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h3>화면 미러링</h3>
+  <ul>
+    <li>PNG 모드: <code>screencap -p</code> 폴링 (조정 가능)</li>
+    <li>H.264 모드: <code>screenrecord</code> stdout → TCP → PyAV 디코드 (~60fps)</li>
+    <li>캔버스 클릭/드래그 → tap/swipe</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h3>제어 / 입력</h3>
+  <ul>
+    <li>HW key 버튼 (Home/Back/Power/Vol±/Menu/Enter)</li>
+    <li>앱 런처 (Instagram/Browser/Settings/...)</li>
+    <li>PC 키보드 → 폰 패스스루 (한글은 ADBKeyboard IME)</li>
+    <li>raw shell 명령창</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h3>매크로</h3>
+  <ul>
+    <li>녹화: TAP/SWIPE/KEY/TEXT 시퀀스 + 상대 timestamp</li>
+    <li>Push&amp;Run: detached <code>.sh</code> 푸시, <code>setsid</code> 백그라운드 실행 → USB 분리해도 동작</li>
+    <li>loop 1/n/∞ 지원, "Stop all" 버튼</li>
+    <li>매크로별 pidfile + 종료 시 자동 cleanup</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h3>안정성 (Stability 5탭)</h3>
+  <ul>
+    <li>logcat crash buffer</li>
+    <li>ANR (/data/anr + dropbox)</li>
+    <li>tombstones (/data/tombstones)</li>
+    <li>binder dump</li>
+    <li>activity processes</li>
+  </ul>
+</div>
+
+</div>
+
+<h2>3. Jank / UI 디버깅 (Android Studio Profiler 스타일)</h2>
+<p>
+프로세스 우클릭 → "jank timeline" → 1180×540 윈도우.
+</p>
+
+<pre><code>┌─ legend(좌) ── stage chips(중) ──────────────────── donut(우) ──────┐
+│                                                                      │
+│  vsync deadline ticks (60Hz/120Hz 자동)                              │
+│  UI │  ▮▮▮  ▮▮  ▮▮▮▮  ▮▮  ▮▮          (IntendedVsync→SyncQueued)   │
+│  RT │     ▮▮     ▮▮▮     ▮▮              (SyncStart→FrameCompleted) │
+│      sync-wait는 점선 커넥터로 연결                                  │
+│  −5s ──────────────────────────────────────────────────── now        │
+└──────────────────────────────────────────────────────────────────────┘
+                                                       ┌─ detail panel ─┐
+                                                       │ Frame #idx     │
+                                                       │ 8단계 컬러 막대 │
+                                                       │ dominant 강조  │
+                                                       └────────────────┘</code></pre>
+
+<h3>특징</h3>
+<ul>
+  <li><b>2-lane 시간축</b> — UI 스레드 / RenderThread 시간정렬</li>
+  <li><b>색상 (AS 컨벤션)</b>:
+    <span class="legend-box" style="background:#3a8a3a"></span>on-time
+    <span class="legend-box" style="background:#cf9f3a"></span>slow (1–2× deadline)
+    <span class="legend-box" style="background:#d04040"></span>janky (≥2×)
+    <span class="legend-box" style="background:#8b1414"></span>frozen (≥700ms)
+  </li>
+  <li><b>vsync 데드라인</b> 자동 — <code>dumpsys display</code>로 60/90/120Hz 감지해서 deadline_ms 동적 조정</li>
+  <li><b>hover</b>: 막대 위에서 frame# · 총 ms · lane 즉시 표시</li>
+  <li><b>클릭</b>: 우측 패널에 8단계 분해 (input · animation · traversal · draw · sync wait · issue cmds · gpu work · gpu swap) + dominant 단계 + 해석 힌트</li>
+  <li><b>도넛</b>: 화면에 보이는 모든 프레임의 누적 stage 비율, 가운데 frame 개수, 아래 dominant %</li>
+  <li><b>Layer stats 버튼</b>: SurfaceFlinger per-layer latency 히스토그램 (app_vsync→present)</li>
+  <li><b>Auto UIA on jank</b> 체크박스 — janky frame(≥2× deadline) 감지 시 <code>uiautomator dump</code> 자동 실행(30s throttle), <code>session_dir/uia/uia_&lt;ts&gt;_fc&lt;n&gt;_&lt;dur&gt;ms.xml</code> 저장 + 활성 패키지/노드 수 표시</li>
+  <li><b>All Frames</b> 버튼 — Android Studio "All Frames" 탭처럼 모든 frame을 표(<code>#</code>, t, Total ms, UI ms, RT ms, Status, Dominant stage)로. on-time/slow/janky/frozen 색상, "Follow newest" 토글로 자동 스크롤</li>
+</ul>
+
+<h3>3D view tree (Layout Inspector 스타일)</h3>
+<p>메인 toolbar "3D view" 버튼 → <code>uiautomator dump</code> 캡처 → view hierarchy를 depth 축으로 ortho 투영해서 회전 가능한 3D로 그림.</p>
+<ul>
+  <li>좌측: 3D 캔버스. <b>드래그</b>=회전, <b>휠</b>=zoom, <b>클릭</b>=선택(드래그 ≠ 클릭, 4px 이내만 클릭), <b>더블클릭</b>=카메라 리셋 + autofit</li>
+  <li>우측 상단: View hierarchy 트리(들여쓰기, 숨겨진 노드는 회색). 캔버스 클릭 ↔ 트리 선택 양방향 동기화</li>
+  <li>우측 중간: <b>Visible</b> 체크박스 + <b>Hide</b> / <b>Solo</b>(선택+ancestors+descendants만 보이기) / <b>Show all</b> 버튼</li>
+  <li>우측 하단: Properties — class, resource-id, package, text, content-desc, bounds(폭×높이), clickable/long-clickable/enabled/focused/scrollable/checkable/checked/selected/password/visible 전부</li>
+  <li>선택된 노드는 흰색 두꺼운 outline + 진한 stipple로 강조</li>
+</ul>
+<p>저장 위치: <code>artifacts/_uia/uia_&lt;ts&gt;_3d.xml</code> (세션 중이면 <code>session_dir/uia/</code>).</p>
+
+<h3>스레드 detail (per-TID 시계열)</h3>
+<p>프로세스 우클릭 → threads → 행 더블클릭 → 선택 TID의 시계열 detail 윈도우.
+1Hz 폴링으로 ~5분 윈도우. CPU%(빨강) + runqueue WAIT%(노랑) 라인 차트, R/S/D/Z/T/I state 색띠 스트립, 마지막 wchan + voluntary/nonvoluntary context switches, kernel stack(있으면).
+stack은 root가 보통 필요하므로 못 읽으면 "(needs root)" 표시.</p>
+
+<h2>4. 시계열 차트 (메인 화면 하단)</h2>
+<p>
+1.5초마다 갱신, 600 샘플(15분) 롤링 버퍼.
+</p>
+
+<ul>
+  <li>6개 시리즈 동시 표시 (각각 토글 가능):
+    <span class="legend-box" style="background:#ff5252"></span><code>CPU</code>
+    <span class="legend-box" style="background:#4ad991"></span><code>MEM</code>
+    <span class="legend-box" style="background:#5b8bff"></span><code>GPU</code>
+    <span class="legend-box" style="background:#ff9f43"></span><code>TEMP</code>
+    <span class="legend-box" style="background:#b48cff"></span><code>GPU MHz</code>
+    <span class="legend-box" style="background:#ffd34a"></span><code>POWER</code>
+  </li>
+  <li>윈도우 토글: 1분 / 5분 / 15분</li>
+  <li>foreground 앱 전환 시점 세로 점선 + 패키지명 마커 (토글 가능)</li>
+  <li>hover → 해당 시점 모든 시리즈 스냅샷 표시</li>
+  <li>각 시리즈는 자기 단위로 정규화 (Temp 25–85°C, Power 0–5W, GPU MHz 0–1GHz)</li>
+</ul>
+
+<h2>5. LLM 런타임 인스펙터</h2>
+
+<h3>세션 기반 artifacts 수집</h3>
+<p>툴바 "● Start session" → <code>artifacts/&lt;timestamp&gt;/</code> 폴더 자동 생성, 종료 시 <code>report.md</code> 자동 작성.</p>
+
+<table>
+<tr><th>파일</th><th>내용</th></tr>
+<tr><td><code>device_info.json</code></td><td>manufacturer/model/SoC/Android/RAM/refresh_hz/kernel</td></tr>
+<tr><td><code>realtime_metrics.jsonl</code></td><td>1.5s마다 CPU/MEM/GPU/Temp/Freq/Power/thermal zones</td></tr>
+<tr><td><code>process_metrics.jsonl</code></td><td>2.5s마다 foreground 앱 + 앱별 CPU/MEM 순위</td></tr>
+<tr><td><code>llm_runtime_metrics.jsonl</code></td><td>앱이 <code>Log.i("LLM_METRIC", json)</code> 호출한 라인 자동 수집</td></tr>
+<tr><td><code>logcat.txt</code></td><td>세션 전체 logcat</td></tr>
+<tr><td><code>perfetto_trace.pb</code></td><td>Perfetto 30s 캡처 시</td></tr>
+<tr><td><code>simpleperf_report_&lt;pid&gt;.txt</code></td><td>우클릭 simpleperf 실행 시</td></tr>
+<tr><td><code>report.md</code></td><td>세션 종료 시 자동 — Device/Model/Performance/Findings/Recommendations</td></tr>
+</table>
+
+<h3>Perfetto 자동 캡처</h3>
+<p>툴바 "Perfetto 30s" → 시스템 트레이스 (sched / cpu_freq / cpu_idle / binder / thermal / atrace gfx·view·wm·am·input) → <code>perfetto_trace.pb</code> pull. 브라우저에서 <a style="color:var(--accent)" href="https://ui.perfetto.dev">ui.perfetto.dev</a> 에 드롭.</p>
+
+<h3>simpleperf 자동 record + report</h3>
+<p>프로세스 우클릭 → "simpleperf 30s record + report" → debuggable APK 한정으로 native 함수 단위 sampling → on-device <code>simpleperf report</code> 자동 실행 → <code>.txt</code> 결과 pull.</p>
+
+<h3>LLM 메트릭 인제스트</h3>
+<p>앱에서 한 줄만 찍으면 세션이 자동 수집:</p>
+<pre><code>Log.i("LLM_METRIC", JSONObject().apply {
+    put("event", "done")
+    put("model_name", "gemma-2b-it")
+    put("backend_requested", "gpu")
+    put("backend_actual", "gpu+cpu_fallback")
+    put("ttft_ms", 612)
+    put("tokens_per_sec", 34.8)
+}.toString())</code></pre>
+<p>전체 스키마는 <code>LLM_METRIC_SCHEMA.md</code> 참고.</p>
+
+<h3>세션 비교 (before/after)</h3>
+<p>툴바 "Compare…" → artifacts 폴더 A/B 선택 → 두 세션의 realtime + LLM JSONL을 모아 평균·p95·Δ% 표 생성. 메트릭별로 "낮을수록 좋음"(CPU/MEM/GPU/Temp/Power/TTFT) vs "높을수록 좋음"(GPU MHz/tps) 방향을 반영해서 개선=초록 / 악화=빨강 / |Δ|&lt;5%=회색 noise로 색칠. optimization 전후 빠른 회귀/개선 검증용.</p>
+
+<h3>병목 룰 엔진 (report.md 자동 생성)</h3>
+<p>세션 종료 시 JSONL 분석 → 스펙 §9 규칙 매칭:</p>
+<ul>
+  <li>thermal 전·후반기 평균 비교 → throttling 의심</li>
+  <li>GPU busy &lt;20% + tokens/sec &lt;5 → CPU fallback 의심</li>
+  <li>CPU peak &gt;80% → CPU 포화 (simpleperf 권장)</li>
+  <li>TTFT &gt;2000ms / decode &lt;3 tok/s → 모델/quantization 검토</li>
+</ul>
+
+<h2>6. 디바이스 관리 / 자동 연결</h2>
+<ul>
+  <li>시작 시 <code>adb start-server</code> + <code>adb devices -l</code> 자동 호출</li>
+  <li>툴바 콤보박스에 model + serial 표시, 디바이스 변경 시 forward/ping 자동 재시도</li>
+  <li><code>↻</code> 새로고침 버튼으로 재스캔</li>
+  <li>모든 adb 호출에 <code>-s &lt;serial&gt;</code> 자동 주입</li>
+  <li>연결 직후 <code>getenforce</code> + <code>id</code> 자동 체크 → 로그에 "selinux=Enforcing (root needed for some power/sysfs reads)" 안내</li>
+</ul>
+
+<h2>7. 스펙 문서 항목별 커버리지</h2>
+
+<table>
+<tr><th>스펙 §</th><th>항목</th><th>구현</th><th>비고</th></tr>
+<tr><td>5.1</td><td>앱별 메모리 상세 (PSS/RSS/Heap/Graphics/SwapPss)</td><td class="status-done">DONE</td><td>우클릭 memory detail</td></tr>
+<tr><td>5.2</td><td>LLM 런타임 metric (TTFT/prefill/decode/tps)</td><td class="status-done">DONE</td><td>logcat tag "LLM_METRIC" 인제스트, 앱 측 한 줄 호출 필요</td></tr>
+<tr><td>5.3</td><td>Perfetto / ATrace</td><td class="status-done">DONE</td><td>30s 캡처 자동화. 앱 내 ATrace marker는 앱 측 instrumentation 필요</td></tr>
+<tr><td>5.4</td><td>simpleperf</td><td class="status-done">DONE</td><td>per-pid 30s record + report 자동</td></tr>
+<tr><td>5.5</td><td>backend / delegate 상태</td><td class="status-done">DONE</td><td>LLM_METRIC의 backend_requested/backend_actual 필드로 수집</td></tr>
+<tr><td>5.6</td><td>Disk I/O</td><td class="status-done">DONE</td><td>우클릭 I/O view, /proc/&lt;pid&gt;/io Δ/s</td></tr>
+<tr><td>5.7</td><td>Power (mW)</td><td class="status-partial">PARTIAL</td><td>코드는 있으나 이 폰(SM-M446K Android 15)은 shell 권한 차단. 3회 폴링 후 데이터 없으면 라벨에 "n/a" 표시 + ⓘ 클릭으로 사유/대안 안내. root/userdebug 환경에서 정상 동작</td></tr>
+<tr><td>5.8</td><td>CPU governor / cpuset / scheduling</td><td class="status-done">DONE</td><td>I/O+sched 뷰에 통합</td></tr>
+<tr><td>5.9</td><td>Binder / system_server 간섭</td><td class="status-done">DONE</td><td>Stability 뷰의 binder/activity 탭 + Perfetto binder_transaction 이벤트</td></tr>
+<tr><td>5.10</td><td>Crash / ANR / tombstone</td><td class="status-done">DONE</td><td>Stability 5탭. /data/anr 등 일부 경로는 root 필요</td></tr>
+<tr><td>5.11</td><td>Display refresh rate</td><td class="status-done">DONE</td><td>dumpsys display 파싱 → jank deadline 동적 조정</td></tr>
+<tr><td>5.12</td><td>권한 / SELinux / AppOps</td><td class="status-done">DONE</td><td>연결 시 getenforce 자동 표시, 우클릭 appops get</td></tr>
+<tr><td>§7</td><td>artifacts/ 폴더 + JSONL + report.md</td><td class="status-done">DONE</td><td>세션 기반 자동 수집</td></tr>
+<tr><td>§9</td><td>병목 판단 룰 엔진</td><td class="status-done">DONE</td><td>세션 종료 시 report.md에 Findings 자동 작성</td></tr>
+<tr><td>§3-(7)</td><td>simpleperf로 native 함수 단위</td><td class="status-done">DONE</td><td>5.4와 동일</td></tr>
+<tr><td>§4-3순위</td><td>statsd / JVMTI / Frida / AGI / vendor NPU</td><td class="status-no">NOT IMPL</td><td>스펙상 3순위 — 필요 시 추후</td></tr>
+</table>
+
+<h2>8. 패키징 / 배포</h2>
+<ul>
+  <li><code>setup_msi.py</code> — cx_Freeze 기반 MSI 생성 스크립트 (WiX 불필요)</li>
+  <li><code>python setup_msi.py bdist_msi</code> → <code>dist/PhoneController-1.0.0-win64.msi</code> (~91 MB)</li>
+  <li>번들: Python 런타임 + Tk + Pillow + PyAV(FFmpeg DLL) + handler.sh/daemon.sh/ADBKeyboard.apk + <code>vendor/platform-tools/</code> (adb.exe + AdbWinApi.dll + AdbWinUsbApi.dll + NOTICE.txt)</li>
+  <li>설치 시 시작 메뉴에 "Phone Controller" 바로가기 생성, 사용자 단위 설치 (관리자 권한 불필요)</li>
+  <li><b>adb 탐색 순서</b>: ① 번들된 <code>vendor/platform-tools/adb.exe</code> → ② <code>%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe</code> → ③ <code>PATH</code>. 셋 다 못 찾으면 시작 시 다이얼로그로 안내 후 종료.</li>
+</ul>
+
+<h2>9. 파일 구조</h2>
+<pre><code>phone-controller/
+├─ gui.py                        # 메인 GUI (~3000 lines)
+├─ daemon.sh                     # 폰의 nc -L 데몬 (포트 8889)
+├─ handler.sh                    # connection-per-fork 핸들러 (모든 명령 dispatch)
+├─ ADBKeyboard.apk               # 한글 입력 IME
+├─ setup_msi.py                  # cx_Freeze MSI 빌드
+├─ LLM_METRIC_SCHEMA.md          # 앱 측 통합 가이드
+├─ SUMMARY.html                  # (이 문서)
+├─ vendor/
+│  └─ platform-tools/            # 번들 adb.exe + DLL + NOTICE.txt
+├─ test_*.py                     # 개발용 단발 테스트 스크립트
+├─ artifacts/                    # 세션 결과 (gitignored)
+│  └─ &lt;YYYYMMDD_HHMMSS&gt;/
+│     ├─ device_info.json
+│     ├─ realtime_metrics.jsonl
+│     ├─ process_metrics.jsonl
+│     ├─ llm_runtime_metrics.jsonl
+│     ├─ logcat.txt
+│     ├─ perfetto_trace.pb
+│     ├─ simpleperf_report_*.txt
+│     └─ report.md
+└─ dist/
+   └─ PhoneController-1.0.0-win64.msi</code></pre>
+
+<h2>10. 핸들러 프로토콜 (TCP :8889)</h2>
+<details>
+<summary>전체 명령 목록</summary>
+<table>
+<tr><th>명령</th><th>인자</th><th>응답</th></tr>
+<tr><td><code>PING</code></td><td>—</td><td><code>PONG</code></td></tr>
+<tr><td><code>TAP</code> / <code>SWIPE</code> / <code>KEY</code></td><td>x y / x1 y1 x2 y2 dur / KEYCODE</td><td>OK</td></tr>
+<tr><td><code>TEXT</code> / <code>IME_TEXT</code></td><td>임의 텍스트</td><td>OK</td></tr>
+<tr><td><code>APP</code> / <code>STOP</code></td><td>com.package</td><td>OK</td></tr>
+<tr><td><code>SHOT</code></td><td>—</td><td>PNG bytes</td></tr>
+<tr><td><code>STREAM</code></td><td>WxH br sec</td><td>H.264 stream</td></tr>
+<tr><td><code>STATS</code></td><td>—</td><td>CPU/MEM/TZ/CPUFREQ/BAT_*/GPU_*/PWR_* 라인</td></tr>
+<tr><td><code>APPS</code></td><td>—</td><td>FG &lt;pkg&gt; + APP rows</td></tr>
+<tr><td><code>THREADS</code></td><td>pid</td><td>TS &lt;tid&gt; &lt;wait_ns&gt; &lt;stat line&gt;</td></tr>
+<tr><td><code>JANK</code></td><td>pkg</td><td>gfxinfo framestats CSV</td></tr>
+<tr><td><code>MEMDETAIL</code></td><td>pkg</td><td>dumpsys meminfo + smaps_rollup + status</td></tr>
+<tr><td><code>IO_PID</code> / <code>SCHED_PID</code></td><td>pid</td><td>/proc/io / cpuset+sched+governor</td></tr>
+<tr><td><code>DISPLAY</code></td><td>—</td><td>dumpsys display 발췌</td></tr>
+<tr><td><code>DEVICE_INFO</code></td><td>—</td><td>getprop + meminfo + cpuinfo + kernel</td></tr>
+<tr><td><code>CRASH_RECENT</code></td><td>—</td><td>logcat -b crash 최근 300줄</td></tr>
+<tr><td><code>ANR_LS</code> / <code>TOMBSTONE_LS</code></td><td>—</td><td>ls + dropbox</td></tr>
+<tr><td><code>BINDER_DUMP</code> / <code>ACTIVITY_PROCS</code></td><td>—</td><td>dumpsys 발췌</td></tr>
+<tr><td><code>APPOPS</code> / <code>GETENFORCE</code></td><td>pkg / —</td><td>appops get / getenforce</td></tr>
+<tr><td><code>SF_LIST</code> / <code>SF_LATENCY</code></td><td>— / layer</td><td>SurfaceFlinger 레이어 / per-frame latency</td></tr>
+<tr><td><code>CLEANUP_TMP</code></td><td>— / all</td><td>macro_*.{sh,log,pid} 정리</td></tr>
+<tr><td><code>SH</code></td><td>임의 shell</td><td>stdout+stderr</td></tr>
+</table>
+</details>
+
+<h2>11. 환경 / 동작 확인</h2>
+<table>
+<tr><th>항목</th><th>값</th></tr>
+<tr><td>테스트 디바이스</td><td>Samsung Galaxy Wide7 (SM-M446K)</td></tr>
+<tr><td>SoC</td><td>Qualcomm Snapdragon 888 (SM8350) + Adreno 660</td></tr>
+<tr><td>Android</td><td>15 (SDK 35), AP3A.240905.015.A2</td></tr>
+<tr><td>RAM</td><td>5.5 GB · Display 1080×2408 @ 120Hz</td></tr>
+<tr><td>SELinux</td><td>Enforcing, shell uid=2000</td></tr>
+<tr><td>외부 도구</td><td>perfetto v46.0 / simpleperf 1.build.M446K — 둘 다 사전 설치됨</td></tr>
+<tr><td>전력 sysfs</td><td>Permission denied (root 미부여) — PWR 표시는 root/userdebug 환경에서만</td></tr>
+</table>
+
+<h2>12. 추가된 분석/자동화 기능 (이번 배치)</h2>
+<ul>
+  <li><b>자동 reconnect</b> — stats/procs worker가 3회 연속 실패 시 adb forward+setup 자동 재시도 (in-flight guard)</li>
+  <li><b>Logcat 라이브</b> (메인 toolbar) — adb logcat 스트리밍 + level/tag/regex 필터 + Clear/Save, level별 색상</li>
+  <li><b>LLM live 차트</b> (메인 toolbar) — TTFT/tps/decode_ms 3-band 차트 + backend_actual 변화 dashed 마커 + thermal-aware tps (≥임계 °C 평균 따로 표시)</li>
+  <li><b>통합 타임라인 마커</b> — 메인 차트 하단에 jank tick(빨강/진빨), 배경에 thermal throttle 빨간 띠 (히스테리시스 65→62°C). 토글 가능</li>
+  <li><b>Compare 윈도우 overlay 탭</b> — 두 세션을 같은 메트릭으로 A(빨강)/B(녹색) 라인 겹쳐 그리기</li>
+  <li><b>자동 회귀 감지</b> — 세션 시작 후 30s baseline → 이후 ±3σ 이탈 시 로그 ⚠ 알림 (메트릭당 60s throttle, CPU/MEM/GPU/Temp/Power)</li>
+  <li><b>Battery breakdown</b> (메인 toolbar) — <code>dumpsys batterystats --checkin</code> 파싱 → 추정 mAh per-uid, wakelock 표, raw 탭</li>
+  <li><b>Network I/O (per-UID)</b> (우클릭 프로세스) — PID→UID 매핑 후 <code>/proc/net/xt_qtaguid/stats</code>(있으면 1Hz) 또는 <code>dumpsys netstats detail</code>(없으면 5s 폴링) 파싱. transports id를 wifi/cellular/vpn 등 라벨로 정규화. <code>/proc/&lt;pid&gt;/net/dev</code>는 net namespace 공유라 디바이스 전체 값이 나오는 문제 해결</li>
+  <li><b>3D 뷰 확장</b> — 검색(class/resource-id/text/content-desc, Next 순회), Nav 버튼(↑parent ↓child ←prev next→), Measure 모드(A→B 중심거리/bbox overlap), Snap 버튼(현재 화면 썸네일)</li>
+  <li><b>Scenario runner</b> (메인 toolbar) — 매크로 .sh + Perfetto/simpleperf 선택, N회 반복, iter간 sleep. 자동 세션 시작/종료 + 결과를 <code>iter_NNN/</code> 서브폴더에 정리</li>
+  <li><b>Flame graph 뷰</b> (메인 toolbar) — <code>simpleperf_report_*.txt</code>의 callgraph 들여쓰기를 파싱해 Canvas flame graph. 클릭=zoom-in, 우클릭=zoom-out, ESC=reset, hover=함수명/percent</li>
+  <li><b>Packet capture (Wire…)</b> (메인 toolbar) — PCAPdroid 1-클릭 연동.
+    <b>● Record</b> 버튼 토글: PCAPdroid <code>CaptureCtrl</code> intent로 자동 start (pcap_dump_mode=pcap_file, pcap_name=<code>pc_&lt;ts&gt;.pcap</code>, 옵션 app_filter). 다시 누르면 stop → 2~3s 대기 후 <code>/sdcard/Download/PCAPdroid/</code>에서 자동 pull → 자체 파서로 로드.
+    PCAPdroid 미설치 감지 시 Play Store 자동 안내. 자체 v2 pcap 파서(RAW IP / Ethernet, IPv4/IPv6) — #/time/src:port/dst:port/proto/len/info. TCP flags(SAFRPU) · UDP len · DNS query name 요약. 패킷 클릭 시 hex+ASCII 바이트뷰. Filter 부분일치. "Open in Wireshark"로 외부 실행. TLS는 PCAPdroid에서 mitm/SSL key log 설정 안 하면 암호화된 채로 보임</li>
+</ul>
+
+<h2>13. 다음 단계 후보</h2>
+<ul>
+  <li><b>화면 외 인스턴스 동시 모니터</b> — 다중 디바이스 같이 차트로</li>
+  <li><b>스크린샷 자동 저장</b> — artifacts/screenshots/ 폴더에 timestamped</li>
+  <li><b>3순위 통합</b> — statsd / JVMTI / Frida / vendor NPU 툴 (스펙 §4)</li>
+  <li><b>Perfetto sched 미리보기</b> — trace.pb 파싱해 코어별 점유 시각화 (protobuf 디펜던시 필요)</li>
+</ul>
+
+<p class="meta">Phone Controller · gui.py @ phone-controller · 작업 정리 자동 생성</p>
+
+</body>
+</html>

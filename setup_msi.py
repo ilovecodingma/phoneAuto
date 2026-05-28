@@ -21,6 +21,7 @@ build_exe_options = {
         ("daemon.sh", "daemon.sh"),
         ("handler.sh", "handler.sh"),
         ("ADBKeyboard.apk", "ADBKeyboard.apk"),
+        ("vendor/platform-tools", "vendor/platform-tools"),
     ],
     "excludes": ["test", "unittest", "pydoc_data"],
     "optimize": 1,

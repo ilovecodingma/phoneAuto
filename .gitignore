@@ -21,3 +21,13 @@ Thumbs.db
 
 # Generated macros (timestamped)
 macro_*.sh
+
+# Session artifacts (per-run dumps, traces, pcaps, jsonl, screenshots)
+artifacts/
+
+# Runtime stdout/stderr captures from "Start-Process python gui.py"
+_run_stderr.log
+_run_stdout.log
+_dbg_*.pcap
+_test.pcap
+_ns.txt

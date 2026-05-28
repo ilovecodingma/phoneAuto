@@ -88,7 +88,226 @@ case "$cmd" in
     # gpu (Adreno) — total mem if readable
     dumpsys gpu 2>/dev/null | awk '/^Global total:/ {print "GPU_MEM "$3; exit}'
     echo "GPU_MODEL $(cat /sys/class/kgsl/kgsl-3d0/gpu_model 2>/dev/null)"
+    # gpu busy — probe Adreno (cumulative busy total) and Mali (instantaneous %)
+    # Adreno: gpubusy file has "busy total" cumulative jiffies → client computes delta
+    if [ -r /sys/class/kgsl/kgsl-3d0/gpubusy ]; then
+      echo "GPU_BUSY adreno $(cat /sys/class/kgsl/kgsl-3d0/gpubusy)"
+    else
+      for p in /sys/class/misc/mali0/device/utilization \
+               /sys/kernel/gpu/gpu_busy \
+               /sys/devices/platform/mali/utilization; do
+        if [ -r "$p" ]; then
+          echo "GPU_BUSY mali $(cat "$p")"
+          break
+        fi
+      done
+      # devfreq style — load is often "<busy> <total>" or just %
+      for p in /sys/class/devfreq/*.mali*/load \
+               /sys/class/devfreq/gpufreq/load; do
+        [ -r "$p" ] || continue
+        echo "GPU_BUSY devfreq $(cat "$p")"
+        break
+      done
+    fi
+    # gpu freq
+    for p in /sys/class/kgsl/kgsl-3d0/gpu_freq \
+             /sys/class/kgsl/kgsl-3d0/clock_mhz \
+             /sys/class/devfreq/*.mali*/cur_freq \
+             /sys/class/devfreq/gpufreq/cur_freq \
+             /sys/kernel/gpu/gpu_clock; do
+      [ -r "$p" ] || continue
+      echo "GPU_FREQ $(cat "$p")"
+      break
+    done
+    # power — current_now (µA, may be negative for drain), voltage_now (µV)
+    cn=$(cat /sys/class/power_supply/battery/current_now 2>/dev/null)
+    vn=$(cat /sys/class/power_supply/battery/voltage_now 2>/dev/null)
+    [ -n "$cn" ] && echo "PWR_CUR $cn"
+    [ -n "$vn" ] && echo "PWR_VOLT $vn"
+    pn=$(cat /sys/class/power_supply/battery/power_now 2>/dev/null)
+    [ -n "$pn" ] && echo "PWR_NOW $pn"
     echo "EOF"
+    ;;
+  MEMDETAIL)
+    # MEMDETAIL <pkg>  — full meminfo + smaps_rollup + status snapshot.
+    pkg=$args
+    [ -z "$pkg" ] && { echo "ERR missing pkg"; exit 0; }
+    echo "===MEMINFO==="
+    dumpsys meminfo "$pkg" 2>/dev/null
+    pid=$(pidof "$pkg" 2>/dev/null | awk '{print $1}')
+    if [ -n "$pid" ] && [ -d "/proc/$pid" ]; then
+      echo "===PID==="
+      echo "$pid"
+      echo "===SMAPS_ROLLUP==="
+      cat "/proc/$pid/smaps_rollup" 2>/dev/null
+      echo "===STATUS==="
+      cat "/proc/$pid/status" 2>/dev/null
+      echo "===OOM==="
+      cat "/proc/$pid/oom_score" 2>/dev/null
+      cat "/proc/$pid/oom_score_adj" 2>/dev/null
+    fi
+    echo "===EOF==="
+    ;;
+  IO_PID)
+    # IO_PID <pid>  — /proc/<pid>/io snapshot (client computes deltas).
+    pid=$args
+    if [ -z "$pid" ] || [ ! -d "/proc/$pid" ]; then
+      echo "ERR bad pid: $pid"
+    else
+      echo "TIME $(date +%s%N)"
+      cat "/proc/$pid/io" 2>/dev/null
+      echo "===EOF==="
+    fi
+    ;;
+  SCHED_PID)
+    # SCHED_PID <pid>  — cpuset, sched, schedstat, cgroup info for one PID.
+    pid=$args
+    if [ -z "$pid" ] || [ ! -d "/proc/$pid" ]; then
+      echo "ERR bad pid: $pid"
+    else
+      echo "===CPUSET==="
+      cat "/proc/$pid/cpuset" 2>/dev/null
+      echo "===CGROUP==="
+      cat "/proc/$pid/cgroup" 2>/dev/null
+      echo "===SCHEDSTAT==="
+      cat "/proc/$pid/schedstat" 2>/dev/null
+      echo "===SCHED==="
+      head -30 "/proc/$pid/sched" 2>/dev/null
+      echo "===GOVERNOR==="
+      for i in 0 1 2 3 4 5 6 7; do
+        g=$(cat /sys/devices/system/cpu/cpu$i/cpufreq/scaling_governor 2>/dev/null)
+        mx=$(cat /sys/devices/system/cpu/cpu$i/cpufreq/scaling_max_freq 2>/dev/null)
+        mn=$(cat /sys/devices/system/cpu/cpu$i/cpufreq/scaling_min_freq 2>/dev/null)
+        [ -n "$g" ] && echo "CPU$i $g $mn $mx"
+      done
+      echo "===EOF==="
+    fi
+    ;;
+  DISPLAY)
+    # Refresh rates + active display info — used to set jank baseline.
+    dumpsys display 2>/dev/null | awk '
+      /mActiveModeId|mDefaultModeId|mActiveDisplayModeId/ {print "MODE", $0}
+      /fps=/ {print "FPS", $0}
+      /refresh-rate=/ {print "REFRESH", $0}
+      /mAppliedDeviceConfig/ {print "APPLIED", $0}
+    ' | head -30
+    echo "===EOF==="
+    ;;
+  CRASH_RECENT)
+    # Last 300 lines of crash buffer.
+    logcat -b crash -v time -d 2>/dev/null | tail -300
+    echo "===EOF==="
+    ;;
+  ANR_LS)
+    # /data/anr is only readable on userdebug/root; otherwise empty.
+    ls -al /data/anr 2>/dev/null
+    echo "===DROPBOX==="
+    dumpsys dropbox --print 2>/dev/null | head -200
+    echo "===EOF==="
+    ;;
+  TOMBSTONE_LS)
+    ls -al /data/tombstones 2>/dev/null
+    echo "===EOF==="
+    ;;
+  DEVICE_INFO)
+    # One-shot summary used at session start.
+    echo "===PROPS==="
+    for p in ro.product.manufacturer ro.product.model ro.product.brand \
+             ro.product.cpu.abi ro.product.cpu.abilist \
+             ro.build.version.release ro.build.version.sdk ro.build.id \
+             ro.soc.manufacturer ro.soc.model ro.board.platform \
+             ro.hardware ro.hardware.chipname; do
+      v=$(getprop "$p" 2>/dev/null)
+      [ -n "$v" ] && echo "$p=$v"
+    done
+    echo "===MEMTOTAL==="
+    awk '/^MemTotal:/ {print $2}' /proc/meminfo
+    echo "===CPU_INFO==="
+    grep -E "^(processor|model name|Hardware|CPU implementer|CPU part)" /proc/cpuinfo 2>/dev/null | head -50
+    echo "===CPU_COUNT==="
+    nproc
+    echo "===GPU==="
+    cat /sys/class/kgsl/kgsl-3d0/gpu_model 2>/dev/null
+    cat /sys/class/kgsl/kgsl-3d0/gpu_freq 2>/dev/null
+    echo "===DISPLAY==="
+    wm size 2>/dev/null
+    wm density 2>/dev/null
+    echo "===KERNEL==="
+    uname -a
+    echo "===EOF==="
+    ;;
+  APPOPS)
+    pkg=$args
+    [ -z "$pkg" ] && { echo "ERR missing pkg"; exit 0; }
+    appops get "$pkg" 2>/dev/null
+    echo "===EOF==="
+    ;;
+  GETENFORCE)
+    getenforce
+    echo "ID $(id)"
+    echo "===EOF==="
+    ;;
+  BINDER_DUMP)
+    dumpsys binder 2>/dev/null | head -300
+    echo "===EOF==="
+    ;;
+  ACTIVITY_PROCS)
+    dumpsys activity processes 2>/dev/null | head -200
+    echo "===EOF==="
+    ;;
+  SF_LIST)
+    dumpsys SurfaceFlinger --list 2>/dev/null
+    echo "===EOF==="
+    ;;
+  SF_LATENCY)
+    layer=$args
+    [ -z "$layer" ] && { echo "ERR missing layer"; exit 0; }
+    dumpsys SurfaceFlinger --latency "$layer" 2>/dev/null
+    echo "===EOF==="
+    ;;
+  CLEANUP_TMP)
+    # Remove old macro_*.sh / .log / .pid files (older than 1 day OR all if arg=all)
+    if [ "$args" = "all" ]; then
+      n_sh=$(ls /data/local/tmp/macro_*.sh 2>/dev/null | wc -l)
+      n_log=$(ls /data/local/tmp/macro_*.log 2>/dev/null | wc -l)
+      rm -f /data/local/tmp/macro_*.sh /data/local/tmp/macro_*.log /data/local/tmp/macro_*.pid
+      echo "removed all: sh=$n_sh log=$n_log"
+    else
+      # toybox find supports -mtime
+      n=$(find /data/local/tmp -maxdepth 1 -name 'macro_*' -mtime +1 2>/dev/null | wc -l)
+      find /data/local/tmp -maxdepth 1 -name 'macro_*' -mtime +1 -delete 2>/dev/null
+      echo "removed older-than-1day: $n"
+    fi
+    echo "===EOF==="
+    ;;
+  THREADS)
+    # THREADS <pid> — dump per-thread stat + schedstat for client-side delta.
+    pid=$args
+    if [ -z "$pid" ] || [ ! -d "/proc/$pid" ]; then
+      echo "ERR bad pid: $pid"
+    else
+      echo "TIME $(date +%s%N)"
+      for stat in /proc/$pid/task/*/stat; do
+        [ -r "$stat" ] || continue
+        tid=${stat%/stat}; tid=${tid##*/}
+        w=$(awk '{print $2}' "/proc/$pid/task/$tid/schedstat" 2>/dev/null)
+        [ -z "$w" ] && w=0
+        # raw stat line: pid (comm) state ... (52+ fields)
+        s=$(cat "$stat" 2>/dev/null)
+        [ -n "$s" ] && echo "TS $tid $w $s"
+      done
+      echo "EOF"
+    fi
+    ;;
+  JANK)
+    # JANK <pkg> — gfxinfo framestats (frame timing ns columns).
+    pkg=$args
+    if [ -z "$pkg" ]; then
+      echo "ERR missing pkg"
+    else
+      dumpsys gfxinfo "$pkg" framestats 2>/dev/null
+      echo "EOF"
+    fi
     ;;
   PROCS)
     # top by CPU%, 25 procs
