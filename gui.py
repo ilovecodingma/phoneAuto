@@ -1346,71 +1346,6 @@ class PhoneController:
         finally:
             menu.grab_release()
 
-    def _open_logcat(self, pid, pkg):
-        win = tk.Toplevel(self.root)
-        win.title(f"logcat — pid {pid} · {pkg}")
-        win.geometry("980x600")
-        bar = tk.Frame(win); bar.pack(fill="x")
-        paused = tk.BooleanVar(value=False)
-        tk.Checkbutton(bar, text="Pause", variable=paused).pack(side="left")
-        tk.Button(bar, text="Clear", command=lambda: txt.delete("1.0", "end")).pack(side="left")
-        tk.Label(bar, text="  Filter:").pack(side="left")
-        filt = tk.Entry(bar, width=30); filt.pack(side="left", padx=2)
-        info = tk.Label(bar, text="streaming…", fg="green"); info.pack(side="right")
-
-        txt = scrolledtext.ScrolledText(win, font=("Consolas", 9), wrap="none", bg="#111", fg="#ddd")
-        txt.pack(fill="both", expand=True)
-        for tag, color in [("V", "#888"), ("D", "#69c"), ("I", "#7c7"),
-                           ("W", "#dc8"), ("E", "#e66"), ("F", "#f33")]:
-            txt.tag_configure(tag, foreground=color)
-
-        proc = subprocess.Popen(
-            adb_cmd("logcat", "-v", "time", "-T", "100", f"--pid={pid}"),
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
-            bufsize=1, universal_newlines=False,
-        )
-
-        stop = threading.Event()
-
-        def reader():
-            try:
-                for raw in iter(proc.stdout.readline, b""):
-                    if stop.is_set():
-                        break
-                    line = raw.decode("utf-8", "replace")
-                    self.root.after(0, append, line)
-            except Exception:
-                pass
-
-        def append(line):
-            if paused.get():
-                return
-            f = filt.get().strip()
-            if f and f not in line:
-                return
-            tag = ""
-            # logcat format: "MM-DD hh:mm:ss.sss L/tag(pid): msg"
-            #  ^^^ level letter is at position offset ~18 after "-v time"
-            parts = line.split(None, 3)
-            if len(parts) >= 3 and len(parts[2]) >= 1:
-                lvl = parts[2][0]
-                if lvl in "VDIWEF":
-                    tag = lvl
-            txt.insert("end", line, tag)
-            if int(txt.index("end-1c").split(".")[0]) > 5000:
-                txt.delete("1.0", "1000.0")
-            txt.see("end")
-
-        threading.Thread(target=reader, daemon=True).start()
-
-        def close():
-            stop.set()
-            try: proc.kill()
-            except Exception: pass
-            win.destroy()
-        win.protocol("WM_DELETE_WINDOW", close)
-
     def _open_dump(self, title, adb_args):
         win = tk.Toplevel(self.root)
         win.title(f"dump — {title}")
@@ -3358,9 +3293,12 @@ class PhoneController:
     )
     _LEVEL_ORDER = {"V": 0, "D": 1, "I": 2, "W": 3, "E": 4, "F": 5}
 
-    def _open_logcat(self):
+    def _open_logcat(self, pid=None, pkg=None):
         win = tk.Toplevel(self.root)
-        win.title("Logcat — live")
+        if pid:
+            win.title(f"Logcat — pid {pid} · {pkg or ''}")
+        else:
+            win.title("Logcat — live")
         win.geometry("1100x700")
 
         bar = tk.Frame(win); bar.pack(fill="x", padx=6, pady=4)
@@ -3414,6 +3352,8 @@ class PhoneController:
 
         def reader():
             cmd = adb_cmd("logcat", "-v", "threadtime")
+            if pid:
+                cmd += [f"--pid={pid}"]
             try:
                 p = subprocess.Popen(
                     cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
